@@ -104,3 +104,21 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# ------------------------------------------------
+# Lost Familiar - Third-party / excluded assets
+# ------------------------------------------------
+
+# Asset Store packages
+/Assets/JMO Assets/
+/Assets/Lana Studio/
+
+# Third-party fonts and audio
+/Assets/Font/
+/Assets/LostFamiliar/Sound/
+
+# Asset Store effect prefabs
+/Assets/LostFamiliar/Prefabs/Effect/
+
+# TextMesh Pro imported assets
+/Assets/TextMesh Pro/

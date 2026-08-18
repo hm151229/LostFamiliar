@@ -1,0 +1,55 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 448cae7d26082364cb36019a59d1ec7f, type: 3}
+  m_Name: 02_Rare_IceSpear
+  m_EditorClassIdentifier: 
+  id: ice_spear
+  rarity: 1
+  icon: {fileID: 21300000, guid: d556c82390d260047bbce2f1a0f6187e, type: 3}
+  maxLevel: 100
+  displayName: "\uC544\uC774\uC2A4 \uC2A4\uD53C\uC5B4"
+  description: "\uAD00\uD1B5\uD558\uB294 \uC5BC\uC74C \uCC3D 5\uAC1C\uB97C \uBD80\uCC44\uAF34\uB85C
+    \uBC1C\uC0AC\uD574 \uACF5\uACA9\uB825\uC758 150% \uD53C\uD574\uB97C \uC900\uB2E4."
+  behavior: 2
+  targetType: 1
+  cooldown: 6
+  damageMultiplier: 1.5
+  radius: 8
+  projectileCount: 5
+  duration: 0
+  tickInterval: 0.5
+  secondaryDamageMultiplier: 0
+  slowPercent: 0
+  pullStrength: 4
+  effectColor: {r: 0.25, g: 0.82, b: 1, a: 1}
+  projectileEffectPrefab: {fileID: 174314868351109486, guid: 58c8ceb897bc18a498f3abbd4f98ddf5, type: 3}
+  projectileTravelDuration: 0.7
+  projectileImpactDistance: 0.05
+  projectileSpawnOffset: {x: 0, y: 0, z: 0}
+  projectileRotationOffset: {x: 0, y: 0, z: 90}
+  hitEffectPrefab: {fileID: 5112403345868107898, guid: 6f34ef0d986e9db4199cf75805f79753, type: 3}
+  hitEffectOffset: {x: 0, y: 0, z: 0}
+  hitEffectLifetime: 1.5
+  explosionEffectPrefab: {fileID: 0}
+  explosionEffectOffset: {x: 0, y: 0, z: 0}
+  explosionEffectRotation: {x: 0, y: 0, z: 0}
+  explosionEffectScaleMultiplier: {x: 1, y: 1, z: 1}
+  explosionEffectLifetime: 1.5
+  playerAreaEffectPrefab: {fileID: 0}
+  playerAreaEffectOffset: {x: 0, y: 0, z: 0}
+  playerAreaEffectLifetime: 0
+  worldAreaEffectPrefab: {fileID: 0}
+  worldAreaEffectOffset: {x: 0, y: 0, z: 0}
+  worldAreaEffectRotation: {x: 0, y: 0, z: 0}
+  worldAreaEffectLifetime: 0
+  ownedEffectType: 3
+  ownedEffectBaseValue: 0.3
