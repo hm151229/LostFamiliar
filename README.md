@@ -5,6 +5,12 @@
 </p>
 
 <p align="center">
+  <a href="https://youtu.be/vhqdApE7mQo">▶ Gameplay Video</a>
+  &nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="https://github.com/hm151229/LostFamiliar/releases/tag/v1.0.0">📱 Android APK</a>
+</p>
+
+<p align="center">
   <b>마녀와 헤어진 사역마 고양이가 마력의 조각을 모으며 모험하는 모바일 방치형 RPG</b>
 </p>
 
