@@ -33,6 +33,7 @@
 | 개발 형태 | 개인 프로젝트 (1인 개발) |
 | 개발 기간 | 2026.07.10 ~ 2026.08.09 |
 | 리팩터링 | 개발 완료 후 4일간 진행 |
+| 추가 개발 및 최적화 | 2026.10.23 ~ 진행 중 |
 | 플랫폼 | Android |
 | 엔진 | Unity 6.0.76f1 |
 | 언어 | C# |
@@ -50,7 +51,8 @@
 - **가이드 미션** — 게임 진행에 따른 단계별 미션과 보상
 - **탑 콘텐츠** — 골드 / 젬 탑, 제한 시간, 등급 평가, 소탕 및 입장권 시스템
 - **저장 / 방치 보상** — JSON 기반 저장 및 최대 12시간의 오프라인 진행 보상
-
+- **상점 / 일일 보상** — 재화 교환, 최초 1회 패키지 및 날짜 기반 무료 보상
+  
 ---
 
 # 🛠 핵심 구현
@@ -474,5 +476,124 @@ Targeting / Damage / Effect 등을 각각 별도의 Service로 더 분리할 수
 - [`PlayerSkillExecutor.cs`](Assets/LostFamiliar/Scripts/Skill/PlayerSkillExecutor.cs)
 - [`ISkillBehavior.cs`](Assets/LostFamiliar/Scripts/Skill/Execution/ISkillBehavior.cs)
 - [`SkillExecutionContext.cs`](Assets/LostFamiliar/Scripts/Skill/Execution/SkillExecutionContext.cs)
+
+
+
+
+---
+
+## ⚡ 성능 최적화
+
+기능 구현 이후 Unity Profiler와 Profile Analyzer를 활용하여 전투 및 UI 시스템에서 반복적으로 실행되는 코드의 비용을 분석하고 개선했습니다. GC Alloc, 오브젝트 생성·파괴 횟수, CPU 실행 시간 등 변경 대상과 직접 연결되는 지표를 기준으로 전후 결과를 비교했습니다.
+
+### 1. StarNova 오브젝트 풀링
+
+**문제점**
+
+StarNova 스킬 사용 시 투사체와 피격 이펙트를 매번 `Instantiate()`로 생성하고 `Destroy()`로 제거해 반복적인 생성·파괴 비용이 발생했습니다.
+
+**개선 내용**
+
+`SkillEffectPool`을 구현하여 반복 사용되는 이펙트를 풀에서 가져오고 사용 후 반환하도록 변경했습니다. 재사용 시 이펙트 상태를 초기화하여 이전 실행의 시각 효과가 남지 않도록 처리했습니다.
+
+![StarNova 오브젝트 풀링 전후 비교](Docs/Images/Optimization/starnova-pooling-profiler-comparison.png)
+
+| 측정 항목 | Before | After |
+| --- | ---: | ---: |
+| Instantiate 마커 호출 수 | 313회 | 114회 |
+| Destroy 마커 호출 수 | 307회 | 115회 |
+
+Windows Development Build의 Warm 상태에서 각각 1,999프레임, 스킬 5회 사용 구간을 비교했습니다. 수치는 해당 분석 구간의 마커 호출 수이며, 풀링 대상 이외의 오브젝트 생성·파괴도 포함될 수 있습니다.
+
+**관련 코드:** `Assets/LostFamiliar/Scripts/Skill/SkillEffectPool.cs`, `Assets/LostFamiliar/Scripts/Skill/PlayerSkillExecutor.cs`
+
+### 2. 델리게이트 캐싱을 통한 GC Alloc 제거
+
+**문제점**
+
+자동 전투의 `UpdateSkills()`에서 메서드 그룹을 매 프레임 전달하면서 델리게이트 객체가 반복 생성되었습니다.
+
+**개선 내용**
+
+`Awake()`에서 델리게이트를 한 번 생성해 필드에 캐싱하고, 이후에는 해당 참조를 재사용하도록 변경했습니다.
+
+![델리게이트 캐싱 적용 전후 코드 비교](Docs/Images/Optimization/delegate-caching-code-comparison.png)
+
+![스킬 미장착 상태 GC Alloc 비교](Docs/Images/Optimization/delegate-cache-gc-a.png)
+
+![스킬 1개 장착 상태 GC Alloc 비교](Docs/Images/Optimization/delegate-cache-gc-b.png)
+
+| 측정 시나리오 | Before | After |
+| --- | ---: | ---: |
+| 스킬 미장착 | 256 B/frame | 0 B/frame |
+| 스킬 1개 장착 | 256 B/frame | 0 B/frame |
+
+선택한 Profiler 프레임의 `Combat.UpdateSkills` 구간에서 측정한 결과입니다. CPU 실행 시간은 표시 정밀도상 유의미한 차이를 확인하기 어려웠습니다.
+
+**관련 코드:** `Assets/LostFamiliar/Scripts/Battle/PlayerAutoCombat.cs`
+
+### 3. 스킬 팝업 갱신 최적화
+
+**문제점**
+
+스킬 데이터가 변경되지 않은 일반 전투 상황에서도 스킬 팝업의 `Refresh()`가 반복 실행되었습니다.
+
+**개선 내용**
+
+스킬 데이터 변경 이벤트를 기준으로 갱신하도록 변경하고, 팝업이 닫혀 있을 때 전체 갱신을 생략했습니다. 동일 프레임의 중복 요청을 통합하고 불필요한 목록 조회와 정렬도 줄였습니다.
+
+![스킬 팝업 Refresh 최적화 비교](Docs/Images/Optimization/skill-popup-refresh.png)
+
+| 측정 시나리오 | Before | After |
+| --- | ---: | ---: |
+| 팝업 닫힘 + 자동 전투 | 47회 | 0회 |
+| 팝업 열림 + 자동 전투 | 103회 | 0회 |
+| 팝업 반복 개폐 | 115회 | 19회 |
+
+자동 전투는 각각 약 2,000프레임을 측정했습니다. 팝업 반복 개폐는 조작 횟수에 차이가 있어 정확한 개선율로 해석하지 않았습니다.
+
+**관련 코드:** `Assets/LostFamiliar/Scripts/Skill/SkillPopupController.cs`
+
+### 4. 기타 최적화 결과
+
+| 최적화 대상 | 개선 내용 | 측정 결과 |
+| --- | --- | --- |
+| 몬스터 분리 처리 | `ToArray()` 제거 및 활성 몬스터 직접 순회 | 10~60마리 테스트에서 해당 구간 GC Alloc 0 B/frame |
+| 반응형 슬롯 레이아웃 | 자식 참조 캐싱 및 변경 없는 레이아웃 갱신 생략 | CPU 중앙값 0.03 ms → 0.01 ms |
+| 버튼 비활성화 시각 처리 | 일반 버튼에 `CanvasGroup` 적용 | Tick 약 36회/프레임 → 20회/프레임 |
+
+**관련 코드**
+
+- `Assets/LostFamiliar/Scripts/Battle/EnemyActor.cs`
+- `Assets/LostFamiliar/Scripts/UI/ResponsiveSlotLayout.cs`
+- `Assets/LostFamiliar/Scripts/UI/CanvasGroupDisabledVisual.cs`
+
+측정 결과는 각 테스트 환경과 분석 구간에 한정되며, 전체 게임 FPS나 모바일 기기에서 동일한 개선율을 보장하는 수치는 아닙니다.
+
+---
+
+## 📅 업데이트 내역
+
+### 2026.11.02 — 상점 및 일일 보상 시스템 추가
+
+게임 내 재화의 활용처를 확장하기 위해 상점 시스템을 구현했습니다.
+
+- **재화 교환:** 보석을 사용해 골드 구매
+- **최초 1회 보상:** 초보자 지원 패키지 지급 및 중복 수령 방지
+- **일일 보상:** 기기 로컬 날짜를 기준으로 무료 골드·보석 보상 지급
+- **저장 연동:** 구매 및 수령 기록 저장, 기존 저장 데이터와의 호환성 유지
+
+<p align="center">
+  <img src="Docs/Images/shop-ui.png" width="65%" alt="상점 및 일일 보상 UI">
+</p>
+
+상품 정보, 구매 처리, 저장 데이터, UI를 분리하여 구현했으며 구매 시점에 재화와 수령 조건을 검증하도록 구성했습니다.
+
+**관련 코드**
+
+- `Assets/LostFamiliar/Scripts/Progression/ShopCatalog.cs`
+- `Assets/LostFamiliar/Scripts/Progression/ShopSystem.cs`
+- `Assets/LostFamiliar/Scripts/Save/ShopSaveData.cs`
+- `Assets/LostFamiliar/Scripts/UI/ShopPopupController.cs`
 
 ---
