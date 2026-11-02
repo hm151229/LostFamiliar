@@ -7,7 +7,7 @@ namespace LostFamiliar.Core
     [Serializable]
     public sealed class GameSaveData
     {
-        public int version = 12;
+        public int version = 13;
         public bool hasSeenIntroStory;
         public long lastSavedUtcTicks;
         public double pendingOfflineGold;
@@ -49,6 +49,7 @@ namespace LostFamiliar.Core
         public List<string> equippedSkillIds = new List<string>();
         public TowerProgressData goldTower = new TowerProgressData();
         public TowerProgressData gemTower = new TowerProgressData();
+        public ShopSaveData shop = new ShopSaveData();
 
         public TowerProgressData GetTower(TowerType type) =>
             type == TowerType.Gold ? goldTower : gemTower;
@@ -246,6 +247,8 @@ namespace LostFamiliar.Core
                     equippedSkillIds.Count - Battle.SkillBalance.MaxEquippedSkillCount);
             for (int i = 0; i < equippedSkillIds.Count; i++)
                 equippedSkillIds[i] ??= string.Empty;
+            shop ??= new ShopSaveData();
+            shop.Normalize();
             goldTower ??= new TowerProgressData();
             gemTower ??= new TowerProgressData();
             goldTower.Normalize();
@@ -261,7 +264,7 @@ namespace LostFamiliar.Core
             lastSavedUtcTicks = Math.Max(0L, lastSavedUtcTicks);
             pendingOfflineGold = Math.Max(0d, pendingOfflineGold);
             pendingOfflineSeconds = Math.Max(0d, Math.Min(12d * 60d * 60d, pendingOfflineSeconds));
-            version = 12;
+            version = 13;
         }
     }
 }

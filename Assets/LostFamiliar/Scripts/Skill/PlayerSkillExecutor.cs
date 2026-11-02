@@ -8,7 +8,7 @@ using UnityEngine.Rendering;
 namespace LostFamiliar.Battle
 {
     [DisallowMultipleComponent]
-    public sealed class PlayerSkillExecutor : MonoBehaviour
+    public sealed partial class PlayerSkillExecutor : MonoBehaviour
     {
         private const int SkillEffectSortingOrder = 50;
 
@@ -18,6 +18,13 @@ namespace LostFamiliar.Battle
         private SpriteRenderer _visualRenderer;
         private Transform _skillEffectRoot;
         private SkillExecutionContext _context;
+        private readonly SkillEffectPool _starNovaProjectilePool = new();
+        [SerializeField] private bool logStarNovaPoolStats = true;
+        private int _nextPoolLogReleaseCount = 12;
+        private int _starNovaProjectileReleaseCount;
+        // Diagnostic counters: only StarNova hit effects, not all skills.
+        private GameObject _starNovaHitEffectPrefab;
+        private int _lastReportedHitEffectReleased;
 
         private readonly Dictionary<SkillBehavior, ISkillBehavior>
             _behaviors = new();
@@ -95,8 +102,10 @@ namespace LostFamiliar.Battle
                 _player == null)
                 return;
 
-            StartCoroutine(
-                ExecuteRoutine(skill));
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (PerformanceSession) { StartCoroutine(TrackPerformanceRoutine(ExecuteRoutine(skill), true)); return; }
+#endif
+            StartCoroutine(ExecuteRoutine(skill));
         }
 
         private IEnumerator ExecuteRoutine(SkillData skill)
@@ -155,7 +164,7 @@ namespace LostFamiliar.Battle
             if (skill.projectileEffectPrefab != null)
             {
                 Quaternion rotation = GetProjectileRotation(start, destination, skill.projectileRotationOffset);
-                projectile = Instantiate(skill.projectileEffectPrefab, start, rotation);
+                projectile = InstantiateSkillPrefab(skill.projectileEffectPrefab, start, rotation);
                 RegisterSkillEffect(projectile);
                 ApplySkillEffectSorting(projectile);
             }
@@ -230,7 +239,12 @@ namespace LostFamiliar.Battle
             if (skill.projectileEffectPrefab != null)
             {
                 Quaternion rotation = GetProjectileRotation(start, destination, skill.projectileRotationOffset);
-                projectile = Instantiate(skill.projectileEffectPrefab, start, rotation);
+                projectile = skill.behavior == SkillBehavior.StarNova
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    && !PerformanceBefore
+#endif
+                    ? _starNovaProjectilePool.Get(skill.projectileEffectPrefab, start, rotation)
+                    : InstantiateSkillPrefab(skill.projectileEffectPrefab, start, rotation);
                 RegisterSkillEffect(projectile);
                 ApplySkillEffectSorting(projectile, sortingOrder);
             }
@@ -274,10 +288,39 @@ namespace LostFamiliar.Battle
                 StopAndDestroyProjectile(projectile);
         }
 
-        private static void StopAndDestroyProjectile(GameObject projectile)
+        private void StopAndDestroyProjectile(GameObject projectile)
         {
             if (projectile == null)
                 return;
+            bool wasPooledAndActive = _starNovaProjectilePool.IsManaged(projectile) && projectile.activeSelf;
+            if (_starNovaProjectilePool.TryRelease(projectile))
+            {
+                if (wasPooledAndActive) _starNovaProjectileReleaseCount++;
+                if (logStarNovaPoolStats &&
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    !PerformanceSession &&
+#endif
+                    _starNovaProjectileReleaseCount >= _nextPoolLogReleaseCount)
+                {
+                    // Total pool counters include both projectile and hit effects.
+                    Debug.Log($"[StarNova Pool] Created={_starNovaProjectilePool.CreatedCount}, " +
+                              $"Reused={_starNovaProjectilePool.ReusedCount}, " +
+                              $"Released={_starNovaProjectilePool.ReleasedCount}, " +
+                              $"Active={_starNovaProjectilePool.ActiveCount} (all pooled effects)", this);
+                    if (_starNovaHitEffectPrefab != null)
+                    {
+                        _starNovaProjectilePool.GetPrefabStats(_starNovaHitEffectPrefab,
+                            out int hitCreated, out int hitReused, out int hitReleased, out int hitActive);
+                        Debug.Log($"[StarNova HitEffect Pool] Prefab={_starNovaHitEffectPrefab.name}, " +
+                                  $"Created={hitCreated}, Reused={hitReused}, " +
+                                  $"Released={hitReleased}, Active={hitActive}, " +
+                                  $"ReleasedSinceLastReport={hitReleased - _lastReportedHitEffectReleased}", this);
+                        _lastReportedHitEffectReleased = hitReleased;
+                    }
+                    _nextPoolLogReleaseCount = _starNovaProjectileReleaseCount + 12;
+                }
+                return;
+            }
 
             foreach (Renderer renderer in projectile.GetComponentsInChildren<Renderer>(true))
                 renderer.enabled = false;
@@ -338,6 +381,9 @@ namespace LostFamiliar.Battle
                 return;
             }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (PerformanceSession && enemy.Health > 0f && impactProjectile != null) PerformanceProjectileHits++;
+#endif
             if (impactProjectile != null)
                 StopAndDestroyProjectile(impactProjectile);
 
@@ -352,6 +398,9 @@ namespace LostFamiliar.Battle
 
             float levelMultiplier = SkillBalance.EquippedEffectMultiplier(GetEquippedSkillLevel(skill));
             float damage = _player.AttackDamage * multiplier * _player.SkillDamageMultiplier * levelMultiplier;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (PerformanceSession && enemy.Health > 0f) { PerformanceHits++; PerformanceDamage += ApplyBossDamage(damage, enemy); }
+#endif
             enemy.TakeDamage(ApplyBossDamage(damage, enemy), applyKnockback);
         }
 
@@ -394,7 +443,7 @@ namespace LostFamiliar.Battle
             int sortingOrder)
         {
             if (prefab == null) return null;
-            GameObject effect = Instantiate(prefab, position, rotation);
+            GameObject effect = InstantiateSkillPrefab(prefab, position, rotation);
             RegisterSkillEffect(effect);
             ApplySkillEffectSorting(effect, sortingOrder);
             Destroy(effect, Mathf.Max(.05f, lifetime));
@@ -410,7 +459,7 @@ namespace LostFamiliar.Battle
             if (skill.behavior == SkillBehavior.FireBall)
                 PlayCombatSfx("SFX_FireBall_Explosion");
             Quaternion rotation = prefab.transform.rotation * Quaternion.Euler(skill.explosionEffectRotation);
-            GameObject effect = Instantiate(prefab, center + skill.explosionEffectOffset, rotation);
+            GameObject effect = InstantiateSkillPrefab(prefab, center + skill.explosionEffectOffset, rotation);
             RegisterSkillEffect(effect);
 
             Vector3 multiplier = skill.explosionEffectScaleMultiplier;
@@ -429,15 +478,39 @@ namespace LostFamiliar.Battle
                 return null;
 
             GameObject prefab = skill.hitEffectPrefab;
-            GameObject effect = Instantiate(
-                prefab,
-                center + skill.hitEffectOffset,
-                prefab.transform.rotation);
+            bool isStarNova = skill.behavior == SkillBehavior.StarNova;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            isStarNova &= !PerformanceBefore;
+#endif
+            GameObject effect;
+            if (isStarNova)
+            {
+                _starNovaHitEffectPrefab = prefab;
+                effect = _starNovaProjectilePool.Get(prefab,
+                    center + skill.hitEffectOffset, prefab.transform.rotation);
+            }
+            else
+            {
+                effect = InstantiateSkillPrefab(prefab,
+                    center + skill.hitEffectOffset, prefab.transform.rotation);
+            }
+            if (effect == null) return null;
             RegisterSkillEffect(effect);
             effect.transform.localScale = prefab.transform.localScale;
             ApplySkillEffectSorting(effect);
-            Destroy(effect, Mathf.Max(.05f, skill.hitEffectLifetime));
+            float lifetime = Mathf.Max(.05f, skill.hitEffectLifetime);
+            if (isStarNova)
+                StartCoroutine(ReleasePooledHitEffectAfter(effect, lifetime));
+            else
+                Destroy(effect, lifetime);
             return effect;
+        }
+
+        private IEnumerator ReleasePooledHitEffectAfter(GameObject effect, float lifetime)
+        {
+            yield return new WaitForSeconds(lifetime);
+            if (effect != null)
+                _starNovaProjectilePool.TryRelease(effect);
         }
 
         private GameObject CreateStationaryProjectileEffect(
@@ -448,7 +521,7 @@ namespace LostFamiliar.Battle
                 return null;
 
             Quaternion rotation = prefab.transform.rotation * Quaternion.Euler(rotationOffset);
-            GameObject effect = Instantiate(prefab, position, rotation);
+            GameObject effect = InstantiateSkillPrefab(prefab, position, rotation);
             RegisterSkillEffect(effect);
             effect.transform.localScale = prefab.transform.localScale;
             ApplySkillEffectSorting(effect);
@@ -467,6 +540,10 @@ namespace LostFamiliar.Battle
         public void Clear()
         {
             StopAllCoroutines();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            PerformanceRoutines = 0;
+            PerformanceBodyRunning = false;
+#endif
 
             for (int i = _playerAttachedSkillEffects.Count - 1; i >= 0; i--)
             {
@@ -479,13 +556,17 @@ namespace LostFamiliar.Battle
             }
             _playerAttachedSkillEffects.Clear();
 
+            // Cancel active projectiles after stopping their coroutines, but retain
+            // pooled instances across stage transitions for the next StarNova cast.
+            _starNovaProjectilePool.ReleaseAllActive();
+
             if (_skillEffectRoot == null)
                 return;
 
             for (int i = _skillEffectRoot.childCount - 1; i >= 0; i--)
             {
                 GameObject effect = _skillEffectRoot.GetChild(i).gameObject;
-                if (effect == null)
+                if (effect == null || _starNovaProjectilePool.IsManaged(effect))
                     continue;
                 effect.SetActive(false);
                 Destroy(effect);
@@ -494,8 +575,11 @@ namespace LostFamiliar.Battle
 
         private void StartSkillRoutine(IEnumerator routine)
         {
-            if (routine != null)
-                StartCoroutine(routine);
+            if (routine == null) return;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (PerformanceSession) { StartCoroutine(TrackPerformanceRoutine(routine, false)); return; }
+#endif
+            StartCoroutine(routine);
         }
 
         private void RegisterPlayerAttachedEffect(GameObject effect)
@@ -526,6 +610,9 @@ namespace LostFamiliar.Battle
         {
             if (effect == null)
                 return null;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (PerformanceSession && !_performanceEffects.Contains(effect)) _performanceEffects.Add(effect);
+#endif
             EnsureSkillEffectRoot();
             SetLayerRecursively(effect, gameObject.layer);
             effect.transform.SetParent(_skillEffectRoot, true);
@@ -675,7 +762,8 @@ namespace LostFamiliar.Battle
         private void OnDestroy()
         {
             Clear();
-
+            // Destroy the pool only when this executor itself is destroyed.
+            _starNovaProjectilePool.Clear();
             if (_skillEffectRoot != null)
                 Destroy(_skillEffectRoot.gameObject);
         }

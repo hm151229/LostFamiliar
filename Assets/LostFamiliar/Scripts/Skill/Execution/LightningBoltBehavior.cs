@@ -32,11 +32,12 @@ namespace LostFamiliar.Battle
                     null);
             }
 
-            context.PlayLoop("SFX_LightningBolt_Cast", effectLifetime, 1f);
-
-            float requestedInterval = Mathf.Max(.05f, skill.tickInterval);
-            int tickCount = Mathf.Max(1, Mathf.CeilToInt(effectLifetime / requestedInterval));
-            float actualInterval = effectLifetime / tickCount;
+            // Gameplay timing is independent of the visual prefab's lifetime.
+            int tickCount = Mathf.Max(1, skill.damageTickCount);
+            float actualInterval = Mathf.Max(.05f, skill.tickInterval);
+            // Audio follows the damage schedule, not long-lived particle cleanup tails.
+            float audioDuration = Mathf.Max(.05f, (tickCount - 1) * actualInterval);
+            context.PlayLoop("SFX_LightningBolt_Cast", audioDuration, 1f);
             float damagePerTick = skill.damageMultiplier / tickCount;
             for (int tick = 0; tick < tickCount; tick++)
             {

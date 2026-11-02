@@ -39,6 +39,7 @@ namespace LostFamiliar.Battle
         [SerializeField] private EquipmentPopupController equipmentPopup;
         [SerializeField] private GachaPopupController gachaPopup;
         [SerializeField] private UpgradePopupController upgradePopup;
+        [SerializeField] private ShopPopupController shopPopup;
         [SerializeField] private SkillBarController skillBar;
         [SerializeField] private AdventureTowerPopupController adventureTowerPopup;
         [SerializeField] private BottomNavigationController bottomNavigation;
@@ -60,6 +61,7 @@ namespace LostFamiliar.Battle
         public OfflineRewardSystem OfflineRewardSystem { get; private set; }
         public GuideMissionSystem GuideMissionSystem { get; private set; }
         public TowerSystem TowerSystem { get; private set; }
+        public ShopSystem ShopSystem { get; private set; }
         public PlayerAutoCombat Player => player;
         public BattlePhase Phase { get; private set; }
         public int StageNumber { get; private set; } = 1;
@@ -99,6 +101,7 @@ namespace LostFamiliar.Battle
         public bool CanClaimGuideMission => GuideMissionProgress >= CurrentGuideMission.target;
 
         public event Action StateChanged;
+        public event Action SkillsChanged;
         public event Action<RewardNotification> RewardGained;
 
         private GameSaveData _saveData;
@@ -142,6 +145,7 @@ namespace LostFamiliar.Battle
             OfflineRewardSystem = new OfflineRewardSystem(_saveData);
             GuideMissionSystem = new GuideMissionSystem(_saveData);
             TowerSystem = new TowerSystem(_saveData);
+            ShopSystem = new ShopSystem(_saveData);
             double offlineSeconds = OfflineRewardSystem?.CaptureElapsedSeconds() ?? 0d;
             RefreshDailyTowerTickets();
             if (equipmentDatabase == null)
@@ -341,6 +345,7 @@ namespace LostFamiliar.Battle
 
         private void AddPlayerExperience(double amount)
         {
+            int previousUnlockedSlots = UnlockedSkillSlotCount;
             _saveData.playerExperience += Math.Max(0d, amount);
             bool leveledUp = false;
             while (_saveData.playerExperience >= GameBalance.ExperienceToLevel(_saveData.playerLevel))
@@ -354,6 +359,8 @@ namespace LostFamiliar.Battle
             {
                 ApplyPlayerProgression();
                 player.Revive();
+                if (UnlockedSkillSlotCount != previousUnlockedSlots)
+                    NotifySkillsChanged();
             }
         }
 
@@ -659,6 +666,7 @@ namespace LostFamiliar.Battle
             OfflineRewardSystem = new OfflineRewardSystem(_saveData);
             GuideMissionSystem = new GuideMissionSystem(_saveData);
             TowerSystem = new TowerSystem(_saveData);
+            ShopSystem = new ShopSystem(_saveData);
             InitializeEquipmentInventory();
             SkillInventory = new SkillInventory(_saveData);
             GachaSystem = new GachaSystem(_saveData, equipmentDatabase, SkillInventory);
@@ -679,6 +687,7 @@ namespace LostFamiliar.Battle
             ApplyBackground();
             Save();
             NotifyStateChanged();
+            NotifySkillsChanged();
         }
 
         public bool CheatMoveToStage(int targetStage)
@@ -760,6 +769,25 @@ namespace LostFamiliar.Battle
             _saveData.gems += Math.Max(0, gems);
             Save();
             NotifyStateChanged();
+        }
+
+        public ShopPurchaseResult GetShopPurchaseStatus(ShopProductId productId)
+        {
+            if (!_initialized || ShopSystem == null)
+                return ShopPurchaseResult.NotInitialized;
+            return ShopSystem.GetPurchaseStatus(productId, DateTime.Now);
+        }
+
+        public ShopPurchaseResult TryPurchaseShopProduct(ShopProductId productId)
+        {
+            if (!_initialized || ShopSystem == null)
+                return ShopPurchaseResult.NotInitialized;
+            ShopPurchaseResult result = ShopSystem.TryPurchase(productId, DateTime.Now);
+            if (result != ShopPurchaseResult.Success)
+                return result;
+            Save();
+            NotifyStateChanged();
+            return ShopPurchaseResult.Success;
         }
 
         public TowerProgressData GetTowerProgress(TowerType type)
@@ -901,13 +929,14 @@ namespace LostFamiliar.Battle
                 !GachaSystem.TryDraw(category, drawCount, out rewards))
                 return false;
 
+            bool skillsChanged = false;
             List<string> equipmentIds = new List<string>();
             foreach (GachaReward reward in rewards)
             {
                 if (reward.equipment != null)
                     equipmentIds.Add(reward.equipment.Id);
-                else if (reward.skill != null)
-                    SkillInventory?.Grant(reward.skill.id);
+                else if (reward.skill != null && SkillInventory?.Grant(reward.skill.id) != null)
+                    skillsChanged = true;
             }
             if (equipmentIds.Count > 0)
                 EquipmentInventory?.GrantBatch(equipmentIds);
@@ -918,6 +947,7 @@ namespace LostFamiliar.Battle
                 ApplyPlayerProgression();
             Save();
             NotifyStateChanged();
+            if (skillsChanged) NotifySkillsChanged();
             return true;
         }
 
@@ -966,6 +996,7 @@ namespace LostFamiliar.Battle
             SyncEquippedSkills();
             Save();
             NotifyStateChanged();
+            if (grantedCount > 0) NotifySkillsChanged();
             return grantedCount;
 #else
             return 0;
@@ -1002,6 +1033,7 @@ namespace LostFamiliar.Battle
 
         public bool TryEquipSkill(string skillId, int slotIndex)
         {
+            bool changed = GetEquippedSkillId(slotIndex) != skillId;
             if (SkillInventory == null ||
                 !SkillInventory.TryEquip(skillId, slotIndex, PlayerLevel))
                 return false;
@@ -1009,6 +1041,7 @@ namespace LostFamiliar.Battle
             SyncEquippedSkills();
             Save();
             NotifyStateChanged();
+            if (changed) NotifySkillsChanged();
             return true;
         }
 
@@ -1021,6 +1054,7 @@ namespace LostFamiliar.Battle
             SyncEquippedSkills();
             Save();
             NotifyStateChanged();
+            NotifySkillsChanged();
         }
 
         public bool CanUpgradeSkill(string skillId)
@@ -1038,6 +1072,7 @@ namespace LostFamiliar.Battle
             SyncEquippedSkills();
             Save();
             NotifyStateChanged();
+            NotifySkillsChanged();
             return true;
         }
 
@@ -1055,6 +1090,7 @@ namespace LostFamiliar.Battle
             SyncEquippedSkills();
             Save();
             NotifyStateChanged();
+            NotifySkillsChanged();
             return upgradedCount;
         }
 
@@ -1151,6 +1187,8 @@ namespace LostFamiliar.Battle
 
         private void NotifyStateChanged() => StateChanged?.Invoke();
 
+        private void NotifySkillsChanged() => SkillsChanged?.Invoke();
+
         private void QueueOfflineReward(double elapsedSeconds)
         {
             if (OfflineRewardSystem == null)
@@ -1221,6 +1259,7 @@ namespace LostFamiliar.Battle
             equipmentPopup?.Bind(this);
             gachaPopup?.Bind(this);
             upgradePopup?.Bind(this);
+            shopPopup?.Bind(this);
             skillBar?.Bind(this);
             adventureTowerPopup?.Bind(this);
             bottomNavigation?.Bind(this);

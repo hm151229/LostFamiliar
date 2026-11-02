@@ -295,7 +295,7 @@ namespace LostFamiliar.Battle
 
             Vector3 push = Vector3.zero;
             float ownRadius = GetSeparationFootprintRadius();
-            foreach (EnemyActor other in Active.ToArray())
+            foreach (EnemyActor other in Active)
             {
                 if (other == null || other == this || other._isDead ||
                     other.CombatGroup != CombatGroup)

@@ -4,10 +4,15 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+using Unity.Profiling;
+#endif
 
 namespace LostFamiliar.Battle
 {
     [DisallowMultipleComponent]
+    // Apply queued interactable changes before the default-order button visual LateUpdate.
+    [DefaultExecutionOrder(-100)]
     public sealed class SkillPopupController : MonoBehaviour
     {
         [Header("Owned Skills")]
@@ -49,24 +54,48 @@ namespace LostFamiliar.Battle
         private readonly List<OwnedSkillItemUI> _ownedSlots = new();
         private UnityAction _equipAction;
         private UnityAction _mergeAction;
+        private bool _refreshPending = true;
+        private bool _equippedSlotsNeedBind = true;
+        private readonly Dictionary<EquipmentEffectType, float> _ownedEffectsTotals = new();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private static readonly ProfilerMarker RefreshMarker = new("SkillPopup.Refresh");
+        private static readonly ProfilerMarker OwnedSkillsMarker = new("SkillPopup.GetOwnedSkills");
+#endif
 
         public void Bind(MainBattleLoop battle)
         {
+            bool battleChanged = _battle != battle;
             if (_battle != null)
-                _battle.StateChanged -= Refresh;
+                _battle.SkillsChanged -= RequestRefresh;
             _battle = battle;
             if (_battle != null)
-                _battle.StateChanged += Refresh;
+                _battle.SkillsChanged += RequestRefresh;
 
+            if (battleChanged)
+            {
+                _selectedSkill = null;
+                IsSelectingReplacement = false;
+            }
+            _equippedSlotsNeedBind = true;
             BindButtons();
-            BindEquippedSlots();
-            Refresh();
+            RequestRefresh();
+        }
+
+        private void RequestRefresh() => _refreshPending = true;
+
+        // Bridge activates the object before Open resets its selection. Defer OnEnable
+        // so Open performs exactly one synchronous refresh with the final selection.
+        private void OnEnable() => RequestRefresh();
+        private void LateUpdate()
+        {
+            if (_refreshPending) Refresh();
         }
 
         public void Open(int preferredSlotIndex = -1)
         {
             IsSelectingReplacement = false;
             _selectedSkill = null;
+            RequestRefresh();
             Refresh();
         }
 
@@ -80,7 +109,12 @@ namespace LostFamiliar.Battle
         {
             _selectedSkill = skill;
             IsSelectingReplacement = false;
-            Refresh();
+            // Selection changes presentation only; no owned-list query or sorting.
+            if (isActiveAndEnabled)
+            {
+                RefreshEquippedSlots();
+                RefreshSelectedPanel();
+            }
         }
 
         public void SelectReplacementSlot(int slotIndex)
@@ -101,7 +135,10 @@ namespace LostFamiliar.Battle
                 _battle.UnequipSkill(slotIndex);
             }
 
-            Refresh();
+            if (_refreshPending)
+                Refresh();
+            else if (isActiveAndEnabled)
+                RefreshEquippedSlots();
         }
 
         private void EquipSelected()
@@ -132,11 +169,42 @@ namespace LostFamiliar.Battle
 
         private void Refresh()
         {
-            BuildOwnedSlots();
-            RefreshEquippedSlots();
+            if (!_refreshPending || !isActiveAndEnabled)
+                return;
+            _refreshPending = false;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            using var refreshScope = RefreshMarker.Auto();
+#endif
+            IReadOnlyList<SkillData> owned;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            using (OwnedSkillsMarker.Auto())
+#endif
+                owned = _battle?.GetOwnedSkills();
+
+            // A progress reset can remove the currently selected skill.
+            if (_selectedSkill != null)
+            {
+                bool stillOwned = false;
+                if (owned != null)
+                    for (int i = 0; i < owned.Count; i++)
+                        if (owned[i] == _selectedSkill) { stillOwned = true; break; }
+                if (!stillOwned)
+                {
+                    _selectedSkill = null;
+                    IsSelectingReplacement = false;
+                }
+            }
+            BuildOwnedSlots(owned);
+            if (_equippedSlotsNeedBind)
+            {
+                _equippedSlotsNeedBind = false;
+                BindEquippedSlots();
+            }
+            else
+                RefreshEquippedSlots();
             RefreshSelectedPanel();
-            RefreshTotalOwnedEffects();
-            RefreshMergeButton();
+            RefreshTotalOwnedEffects(owned);
+            RefreshMergeButton(owned);
         }
 
         private void BindEquippedSlots()
@@ -148,9 +216,8 @@ namespace LostFamiliar.Battle
                 equippedSlots[i]?.Bind(_battle, this, i);
         }
 
-        private void BuildOwnedSlots()
+        private void BuildOwnedSlots(IReadOnlyList<SkillData> owned)
         {
-            IReadOnlyList<SkillData> owned = _battle?.GetOwnedSkills();
             int count = owned?.Count ?? 0;
 
             while (_ownedSlots.Count < count && ownedSlotPrefab != null && ownedContent != null)
@@ -177,7 +244,8 @@ namespace LostFamiliar.Battle
 
             for (int i = 0; i < _ownedSlots.Count; i++)
             {
-                _ownedSlots[i].gameObject.SetActive(true);
+                if (!_ownedSlots[i].gameObject.activeSelf)
+                    _ownedSlots[i].gameObject.SetActive(true);
                 _ownedSlots[i].Bind(owned[i], _battle, this);
             }
 
@@ -250,17 +318,21 @@ namespace LostFamiliar.Battle
             }
         }
 
-        private void RefreshTotalOwnedEffects()
+        private void RefreshTotalOwnedEffects(IReadOnlyList<SkillData> owned)
         {
             if (_battle == null)
                 return;
 
-            var totals = new Dictionary<EquipmentEffectType, float>();
-            foreach (SkillData skill in _battle.GetOwnedSkills())
+            Dictionary<EquipmentEffectType, float> totals = _ownedEffectsTotals;
+            totals.Clear();
+            if (owned != null)
             {
-                SkillSaveEntry state = _battle.GetSkillState(skill.id);
-                float value = SkillBalance.OwnedEffectValue(skill, state?.level ?? 0);
-                totals[skill.ownedEffectType] = totals.TryGetValue(skill.ownedEffectType, out float old) ? old + value : value;
+                foreach (SkillData skill in owned)
+                {
+                    SkillSaveEntry state = _battle.GetSkillState(skill.id);
+                    float value = SkillBalance.OwnedEffectValue(skill, state?.level ?? 0);
+                    totals[skill.ownedEffectType] = totals.TryGetValue(skill.ownedEffectType, out float old) ? old + value : value;
+                }
             }
 
             SetTotalEffect(attackEffectText, totals, EquipmentEffectType.AttackPercent);
@@ -282,11 +354,11 @@ namespace LostFamiliar.Battle
             text.text = $"+{value:0.##}%";
         }
 
-        private void RefreshMergeButton()
+        private void RefreshMergeButton(IReadOnlyList<SkillData> owned)
         {
             bool canMerge = false;
-            if (_battle != null)
-                foreach (SkillData skill in _battle.GetOwnedSkills())
+            if (_battle != null && owned != null)
+                foreach (SkillData skill in owned)
                     if (_battle.CanUpgradeSkill(skill.id)) { canMerge = true; break; }
             if (mergeAllButton != null) mergeAllButton.interactable = canMerge;
             if (mergeRedDot != null) mergeRedDot.SetActive(canMerge);
@@ -310,7 +382,7 @@ namespace LostFamiliar.Battle
 
         private void OnDestroy()
         {
-            if (_battle != null) _battle.StateChanged -= Refresh;
+            if (_battle != null) _battle.SkillsChanged -= RequestRefresh;
             if (equipButton != null && _equipAction != null) equipButton.onClick.RemoveListener(_equipAction);
             if (mergeAllButton != null && _mergeAction != null) mergeAllButton.onClick.RemoveListener(_mergeAction);
         }

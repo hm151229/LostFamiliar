@@ -30,12 +30,16 @@ namespace LostFamiliar.Battle
             _view ??= GetComponent<InventorySlotView>();
             _button ??= GetComponent<Button>();
 
-            if (_button != null && _clickAction != null)
-                _button.onClick.RemoveListener(_clickAction);
-            _clickAction = () => _popup?.SelectSkill(_skill);
-            _button?.onClick.AddListener(_clickAction);
+            if (_button != null && _clickAction == null)
+            {
+                _clickAction = SelectBoundSkill;
+                _button.onClick.AddListener(_clickAction);
+            }
             Refresh();
         }
+
+        // Read current fields so sorting/rebinding never captures a previous skill.
+        private void SelectBoundSkill() => _popup?.SelectSkill(_skill);
 
         public void Refresh()
         {

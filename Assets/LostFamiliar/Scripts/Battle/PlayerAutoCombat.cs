@@ -79,6 +79,8 @@ namespace LostFamiliar.Battle
 
         private float _attackTimer;
         private PlayerSkillController _skillController;
+        private System.Func<SkillData, bool> _canUseSkill;
+        private System.Action<SkillData> _useSkill;
         private Vector3 _initialPosition;
         private SpriteRenderer _visualRenderer;
         private Animator _visualAnimator;
@@ -120,6 +122,8 @@ namespace LostFamiliar.Battle
         private void Awake()
         {
             _skillController = new PlayerSkillController();
+            _canUseSkill = CanUseSkill;
+            _useSkill = UseSkill;
             MaxHealth = baseMaxHealth;
             AttackDamage = baseAttackDamage;
             AttacksPerSecond = baseAttacksPerSecond;
@@ -224,8 +228,14 @@ namespace LostFamiliar.Battle
             attackBobSpeed = Mathf.Max(.1f, attackBobSpeed);
         }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        public bool PerformanceManualControl { get; set; }
+#endif
         private void Update()
         {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (PerformanceManualControl) { UpdatePlayerAnimation(false); return; }
+#endif
             if (!IsAlive)
                 return;
 
@@ -458,8 +468,8 @@ namespace LostFamiliar.Battle
         {
             _skillController?.Update(
                 Time.deltaTime,
-                CanUseSkill,
-                UseSkill);
+                _canUseSkill,
+                _useSkill);
         }
 
         private bool CanUseSkill(SkillData skill)
@@ -563,6 +573,9 @@ namespace LostFamiliar.Battle
 
         public void TakeDamage(float damage)
         {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (PerformanceManualControl) return;
+#endif
             if (!IsAlive || damage <= 0f || Time.time < _nextDamageAllowedTime)
                 return;
 
@@ -669,8 +682,14 @@ namespace LostFamiliar.Battle
 
             switch (skill.behavior)
             {
-                case SkillBehavior.MagicMissile:
                 case SkillBehavior.LightningBolt:
+                    // Legacy reward-cap budget, deliberately frozen for balance continuity.
+                    // Not the prefab's four visual bolts, nor its actual damage tick count.
+                    const double lightningOfflineHitBudget = 4d;
+                    hitsPerCast = lightningOfflineHitBudget;
+                    damageMultiplierPerCast = skill.damageMultiplier;
+                    break;
+                case SkillBehavior.MagicMissile:
                 case SkillBehavior.WindCutter:
                 case SkillBehavior.Meteor:
                     hitsPerCast = projectiles;
@@ -683,11 +702,15 @@ namespace LostFamiliar.Battle
                     break;
                 case SkillBehavior.BlackHole:
                     hitsPerCast = ticks + (skill.secondaryDamageMultiplier > 0f ? 1 : 0);
-                    damageMultiplierPerCast = skill.damageMultiplier * ticks + skill.secondaryDamageMultiplier;
+                    // Full continuous damage plus the ending hit; assumes every tick connects.
+                    damageMultiplierPerCast = (double)skill.damageMultiplier + skill.secondaryDamageMultiplier;
                     break;
                 case SkillBehavior.StarNova:
                     hitsPerCast = 1 + (skill.secondaryDamageMultiplier > 0f ? 1 : 0);
-                    damageMultiplierPerCast = skill.damageMultiplier + skill.secondaryDamageMultiplier;
+                    // Per-cast offline budget: one area target plus all shards, not damage per enemy.
+                    // Keep the existing hit-opportunity cap above independent of shard count.
+                    damageMultiplierPerCast = (double)skill.damageMultiplier +
+                                              (double)skill.secondaryDamageMultiplier * projectiles;
                     break;
                 default:
                     hitsPerCast = 1d;

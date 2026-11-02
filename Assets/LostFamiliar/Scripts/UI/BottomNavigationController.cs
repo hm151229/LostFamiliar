@@ -376,6 +376,8 @@ namespace LostFamiliar.Battle
         private readonly Dictionary<Graphic, float> _baseAlpha = new Dictionary<Graphic, float>();
         private bool _wasInteractable;
         private bool _initialized;
+        private readonly List<Graphic> _graphicBuffer = new List<Graphic>();
+        private readonly List<Graphic> _keyBuffer = new List<Graphic>();
 
         private void Awake()
         {
@@ -392,7 +394,8 @@ namespace LostFamiliar.Battle
             if (_button == null)
                 return;
 
-            foreach (Graphic graphic in GetComponentsInChildren<Graphic>(true))
+            GetComponentsInChildren(true, _graphicBuffer);
+            foreach (Graphic graphic in _graphicBuffer)
             {
                 if (graphic == null || graphic == _button.targetGraphic)
                     continue;
@@ -420,6 +423,8 @@ namespace LostFamiliar.Battle
 
         internal void RestoreAndRemove()
         {
+            // Destroy is deferred; stop legacy LateUpdate before another owner takes over.
+            enabled = false;
             RestoreBaseAlpha();
             Destroy(this);
         }
@@ -466,7 +471,9 @@ namespace LostFamiliar.Battle
 
         private void CaptureCurrentAlpha()
         {
-            foreach (Graphic graphic in new List<Graphic>(_baseAlpha.Keys))
+            _keyBuffer.Clear();
+            _keyBuffer.AddRange(_baseAlpha.Keys);
+            foreach (Graphic graphic in _keyBuffer)
                 if (graphic != null)
                     _baseAlpha[graphic] = graphic.color.a;
         }
@@ -500,7 +507,9 @@ namespace LostFamiliar.Battle
 
         private void RemoveDestroyedGraphics()
         {
-            foreach (Graphic graphic in new List<Graphic>(_baseAlpha.Keys))
+            _keyBuffer.Clear();
+            _keyBuffer.AddRange(_baseAlpha.Keys);
+            foreach (Graphic graphic in _keyBuffer)
                 if (graphic == null)
                     _baseAlpha.Remove(graphic);
         }
@@ -514,6 +523,11 @@ namespace LostFamiliar.Battle
     internal sealed class ButtonDisabledVisualSystem : MonoBehaviour
     {
         private float _nextScanTime;
+        private static readonly List<Button> ButtonBuffer = new List<Button>();
+        private static readonly List<CanvasGroup> GroupBuffer = new List<CanvasGroup>();
+        private static readonly List<Animator> AnimatorBuffer = new List<Animator>();
+        private static readonly List<KeepGraphicVisualWhenButtonDisabled> ExceptionBuffer =
+            new List<KeepGraphicVisualWhenButtonDisabled>();
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void Install()
@@ -549,7 +563,9 @@ namespace LostFamiliar.Battle
                 if (button == null || !button.gameObject.scene.IsValid())
                     continue;
                 if (button.GetComponentInParent<InventorySlotView>(true) != null ||
-                    button.GetComponent<KeepButtonVisualWhenDisabled>() != null)
+                    button.GetComponent<KeepButtonVisualWhenDisabled>() != null ||
+                    button.GetComponent<CanvasGroupDisabledVisual>() != null ||
+                    HasManagedAncestor(button.transform.parent))
                 {
                     ButtonChildDisabledVisual existing =
                         button.GetComponent<ButtonChildDisabledVisual>();
@@ -557,11 +573,74 @@ namespace LostFamiliar.Battle
                         existing.RestoreAndRemove();
                     continue;
                 }
-                ButtonChildDisabledVisual visual =
-                    button.GetComponent<ButtonChildDisabledVisual>() ??
-                    button.gameObject.AddComponent<ButtonChildDisabledVisual>();
+                ButtonChildDisabledVisual visual = button.GetComponent<ButtonChildDisabledVisual>();
+                bool canInstall = CanInstallCanvasGroup(button);
+                // Ordinary active buttons need no per-frame helper. Special policies still
+                // initialize legacy alpha tracking while active, preserving their baseline.
+                if (visual == null && button.interactable && canInstall)
+                    continue;
+
+                if (canInstall)
+                {
+                    // Restore legacy-written Graphic alpha before the group starts owning opacity.
+                    if (visual != null) visual.RestoreAndRemove();
+                    float disabledAlpha = button.colors.disabledColor.a;
+                    ColorBlock colors = button.colors;
+                    Color disabled = colors.disabledColor;
+                    disabled.a = 1f;
+                    colors.disabledColor = disabled;
+                    button.colors = colors;
+                    button.gameObject.AddComponent<CanvasGroup>();
+                    CanvasGroupDisabledVisual groupVisual =
+                        button.gameObject.AddComponent<CanvasGroupDisabledVisual>();
+                    groupVisual.SetDisabledAlpha(disabledAlpha);
+                    continue;
+                }
+
+                // Unknown/special policies retain the old behavior; do not normalize their colors.
+                visual ??= button.gameObject.AddComponent<ButtonChildDisabledVisual>();
                 visual.RefreshGraphics();
             }
         }
+
+        private static bool HasManagedAncestor(Transform parent)
+        {
+            for (; parent != null; parent = parent.parent)
+                if (parent.GetComponent<CanvasGroupDisabledVisual>() != null)
+                    return true;
+            return false;
+        }
+
+        private static bool CanInstallCanvasGroup(Button button)
+        {
+            // Only the verified ColorTint convention is automatically migrated.
+            // Alpha=1, None/Animation/SpriteSwap, custom text fades and skill slots need explicit policy.
+            if (button.transition != Selectable.Transition.ColorTint ||
+                button.colors.disabledColor.a >= 1f || button.colors.colorMultiplier != 1f ||
+                button.colors.normalColor.a != 1f ||
+                button.GetComponentInParent<UpgradeStatRowUI>(true) != null ||
+                button.GetComponentInParent<SkillSlotUI>(true) != null ||
+                button.GetComponentInParent<EquippedSkillPopupSlotUI>(true) != null ||
+                button.GetComponentInParent<KeepGraphicVisualWhenButtonDisabled>(true) != null)
+                return false;
+
+            if (button.targetGraphic != null &&
+                !button.targetGraphic.transform.IsChildOf(button.transform))
+                return false;
+
+            for (Transform parent = button.transform.parent; parent != null; parent = parent.parent)
+                if (parent.GetComponent<Button>() != null)
+                    return false;
+
+            button.GetComponentsInChildren(true, ButtonBuffer);
+            if (ButtonBuffer.Count != 1) return false;
+            button.GetComponentsInChildren(true, GroupBuffer);
+            if (GroupBuffer.Count != 0) return false;
+            button.GetComponentsInChildren(true, ExceptionBuffer);
+            if (ExceptionBuffer.Count != 0) return false;
+            button.GetComponentsInChildren(true, AnimatorBuffer);
+            return AnimatorBuffer.Count == 0;
+        }
+
     }
 }

@@ -63,6 +63,7 @@ namespace LostFamiliar.Battle
         [SerializeField] private Sprite gemRewardIcon;
 
         private MainBattleLoop _main;
+        private EventSystem _towerEventSystem;
         private TowerRunSetup _setup;
         private Color _defaultTimeTextColor = Color.white;
         private EnemyActor _currentBoss;
@@ -97,7 +98,20 @@ namespace LostFamiliar.Battle
             if (timeText != null)
                 _defaultTimeTextColor = timeText.color;
 
+            // The tower EventSystem is saved inactive so loading the additive scene
+            // cannot briefly register a second EventSystem before Start runs.
+            _towerEventSystem = FindTowerEventSystem();
+            if (_towerEventSystem == null)
+            {
+                Debug.LogError("TowerBattleScene에 EventSystem이 없습니다.", this);
+                _main.CancelTowerRun();
+                UnloadTowerScene();
+                return;
+            }
+
             HideOtherScenePresentation();
+            _towerEventSystem.gameObject.SetActive(true);
+            _towerEventSystem.enabled = true;
 
             if (towerAudioListener != null)
                 towerAudioListener.enabled = true;
@@ -490,8 +504,25 @@ namespace LostFamiliar.Battle
             _setup.normalEnemyCount * _setup.normalEnemyHealth +
             _setup.bossCount * _setup.bossHealth;
 
+        private EventSystem FindTowerEventSystem()
+        {
+            // Include inactive objects, and never pick MainScene's EventSystem.current.
+            foreach (GameObject root in gameObject.scene.GetRootGameObjects())
+                foreach (EventSystem candidate in root.GetComponentsInChildren<EventSystem>(true))
+                    return candidate;
+            return null;
+        }
+
+        private void DeactivateTowerEventSystem()
+        {
+            if (_towerEventSystem == null) return;
+            _towerEventSystem.enabled = false;
+            _towerEventSystem.gameObject.SetActive(false);
+        }
+
         private void UnloadTowerScene()
         {
+            DeactivateTowerEventSystem();
             if (gameObject.scene.IsValid() && SceneManager.sceneCount > 1)
                 SceneManager.UnloadSceneAsync(gameObject.scene);
         }
@@ -583,6 +614,9 @@ namespace LostFamiliar.Battle
 
         private void OnDestroy()
         {
+            // Scene object destruction order is not guaranteed. Unregister the tower
+            // before restoring the saved main-scene EventSystem state.
+            DeactivateTowerEventSystem();
             RestoreOtherScenePresentation();
             foreach (EnemyActor enemy in _enemies)
                 if (enemy != null) enemy.Died -= OnEnemyDied;

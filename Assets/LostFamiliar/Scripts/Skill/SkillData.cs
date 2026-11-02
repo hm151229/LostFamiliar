@@ -34,6 +34,8 @@ namespace LostFamiliar.Battle
         [Min(1)] public int projectileCount = 1;
         [Min(0f)] public float duration;
         [Min(0.02f)] public float tickInterval = .5f;
+        [Tooltip("LightningBolt의 명시적 피해 틱 수입니다. 시각 이펙트의 파티클 수명과 독립적입니다.")]
+        [Min(1)] public int damageTickCount = 1;
         [Min(0f)] public float secondaryDamageMultiplier;
         [Range(0f, .95f)] public float slowPercent;
         [Min(0f)] public float pullStrength = 4f;
